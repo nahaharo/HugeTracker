@@ -20,7 +20,12 @@ Header only project(well we needs some adjustment for it)
 
 int main()
 {
-	std::string url = "rtspsrc location=rtsp://admin:kaya1202ha@192.168.219.110:554/Stream/Channels/102  latency=30 ! decodebin ! videoconvert ! appsink";
+	std::string url = "rtspsrc location=rtsp://<ID>:<password>@192.168.219.110:554/Stream/Channels/102  latency=30 ! decodebin ! videoconvert ! appsink";
+    //you can set your own video but when video ends, rotation and translation
+    //will not change
+    
+    //std::string url = "your video";
+    
 	auto t = huge::HugeTracker::GetInstance(url);
 
 	while (true)
