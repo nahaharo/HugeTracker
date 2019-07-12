@@ -10,6 +10,20 @@ Header only project(well we needs some adjustment for it)
 
 
 
+## Requirement
+
+### OpenCV
+
+This library needs opencv.
+
+Recommend to compile on working computer.
+
+### GSTREAM
+
+Strongly recommend to use gstream to reduce latency between rtsp stream and opencv.
+
+
+
 ### Usage Example : test_console/test_console.cpp
 
 ```cpp
@@ -24,7 +38,7 @@ int main()
     //you can set your own video but when video ends, rotation and translation
     //will not change
     
-    //std::string url = "your video";
+    //std::string url = "filesrc location=${Location to mp4 file} ! decodebin ! videoconvert ! appsink";
     
 	auto t = huge::HugeTracker::GetInstance(url);
 

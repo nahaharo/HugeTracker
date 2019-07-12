@@ -85,6 +85,10 @@ namespace huge
 			: capture(Source), img_option(option), object(Basic), intr(intr)
 		{
 			capture = cv::VideoCapture(Source);
+
+			if (!capture.isOpened())
+				throw std::runtime_error("Error opening video stream or file");
+
 			producer_thread = std::thread([=] { producer(); });
 			consumer_thread = std::thread([=] { consumer(); });
 		};
