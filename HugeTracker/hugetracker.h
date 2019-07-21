@@ -10,7 +10,7 @@ namespace huge
 		cv::Size blur_size;
 	};
 
-	Img_process_option Default_option = { 3.0, 170, cv::Size(7,7) };
+	Img_process_option Default_option = { 1.0, 180, cv::Size(3,3) };
 
 	class camera_intrinsic
 	{
@@ -340,4 +340,26 @@ void huge::HugeTracker::consumer()
 		rots = rot_arr;
 		result_lock.unlock();
 	}
+}
+
+inline std::tuple<double, double, double> mat_to_euler(const std::array<double, 9> m)
+{
+	double sy = sqrt(m[0]*m[0] + m[3]*m[3]);
+
+	bool singular = sy < 1e-6;
+
+	double x, y, z;
+	if (!singular)
+	{
+		x = atan2(m[7], m[8]);
+		y = atan2(-m[6], sy);
+		z = atan2(m[3], m[0]);
+	}
+	else
+	{
+		x = atan2(-m[5], m[4]);
+		y = atan2(-m[6], sy);
+		z = 0;
+	}
+	return std::make_tuple(x, y, z);
 }
