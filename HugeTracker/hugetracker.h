@@ -8,9 +8,10 @@ namespace huge
 		float blur_sigma;
 		int threshold;
 		cv::Size blur_size;
+		int offset;
 	};
 
-	Img_process_option Default_option = { 1.0, 180, cv::Size(3,3) };
+	Img_process_option Default_option = { 3.0, 220, cv::Size(5,5), 80 };
 
 	class camera_intrinsic
 	{
@@ -89,6 +90,19 @@ namespace huge
 			if (!capture.isOpened())
 				throw std::runtime_error("Error opening video stream or file");
 
+			cv::Mat frame, gray;
+			capture.read(frame);
+			cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
+			cv::Mat kernel = cv::Mat::ones(cv::Size(51, 51), CV_32F) / 51 / 51;
+			gray.convertTo(gray, CV_32F);
+			cv::filter2D(gray, thresh_mask, -1, kernel);
+
+			thresh_mask.convertTo(thresh_mask, CV_8UC1);
+			thresh_mask += img_option.offset;
+
+			cv::Mat resized;
+			cv::resize(thresh_mask, resized, cv::Size(0, 0), 0.25, 0.25);
+
 			producer_thread = std::thread([=] { producer(); });
 			consumer_thread = std::thread([=] { consumer(); });
 		};
@@ -98,6 +112,8 @@ namespace huge
 			producer_thread.join();
 			consumer_thread.join();
 		};
+
+		
 
 		static HugeTracker * m_pInstance;
 
@@ -118,9 +134,12 @@ namespace huge
 
 		std::atomic<bool> kill_sig = false;
 
+		cv::Mat thresh_mask;
+
 	private:
-		cv::Point2f cross_point(cv::Point2f &p1, cv::Point2f &p2, cv::Point2f &p3, cv::Point2f &p4);
-		bool isright(cv::Point2f &p1, cv::Point2f &p2);
+		bool Getcrosspoint(cv::Point2f &p1, cv::Point2f &p2, cv::Point2f &p3, cv::Point2f &p4, cv::Point2f &cross);
+		bool isright(cv::Point2f &p1, cv::Point2f &p2, bool &ans);
+		bool LabelingPoint(std::tuple<cv::Point2f, cv::Point2f, cv::Point2f, cv::Point2f> &param, std::tuple<cv::Point2f, cv::Point2f, cv::Point2f, cv::Point2f> &ans);
 		void producer();
 		void consumer();
 	};
@@ -129,7 +148,7 @@ namespace huge
 }
 
 
-cv::Point2f huge::HugeTracker::cross_point(cv::Point2f &p1, cv::Point2f &p2, cv::Point2f &p3, cv::Point2f &p4)
+bool huge::HugeTracker::Getcrosspoint(cv::Point2f &p1, cv::Point2f &p2, cv::Point2f &p3, cv::Point2f &p4, cv::Point2f &cross)
 {
 	auto c1 = p1.x * p2.y - p2.x * p1.y;
 	auto a1 = p2.y - p1.y;
@@ -140,17 +159,146 @@ cv::Point2f huge::HugeTracker::cross_point(cv::Point2f &p1, cv::Point2f &p2, cv:
 	auto b2 = -p4.x + p3.x;
 
 	auto det = a1 * b2 - b1 * a2;
-	if (det == 0) throw std::runtime_error("Determinent is 0.");
+	if (det == 0) return false;
 	auto x = (c1 * b2 - b1 * c2) / det;
 	auto y = (-a2 * c1 + a1 * c2) / det;
-	return cv::Point2f(x, y);
+
+	cross = cv::Point2f(x, y);
+	return true;
 }
 
-bool huge::HugeTracker::isright(cv::Point2f &p1, cv::Point2f &p2)
+bool huge::HugeTracker::isright(cv::Point2f &p1, cv::Point2f &p2, bool &rans)
 {
 	auto ans = p1.x * p2.y - p1.y * p2.x;
-	if (ans == 0) throw std::runtime_error("Determinent is 0.");
-	return ans < 0;
+	if (ans == 0) return false;
+	rans = ans;
+	return true;
+}
+
+bool huge::HugeTracker::LabelingPoint(std::tuple<cv::Point2f, cv::Point2f, cv::Point2f, cv::Point2f> &param, std::tuple<cv::Point2f, cv::Point2f, cv::Point2f, cv::Point2f> &ans)
+{
+
+	auto& p0 = std::get<0>(param);
+	auto& p1 = std::get<1>(param);
+	auto& p2 = std::get<2>(param);
+	auto& p3 = std::get<3>(param);
+	//estimation
+	std::array<cv::Point2f, 3> crosses;
+
+	bool check = true;
+
+	{
+		check &= Getcrosspoint(p0, p1, p2, p3, crosses[0]);
+		check &= Getcrosspoint(p0, p2, p1, p3, crosses[1]);
+		check &= Getcrosspoint(p0, p3, p1, p2, crosses[2]);
+	}
+	if (!check) return false;
+
+	cv::Point2f avg_point = p0 + p1 + p2 + p3;
+	avg_point /= 4.0f;
+
+	std::array<float, 3> cross_dist;
+	cross_dist[0] = cv::norm(crosses[0] - avg_point);
+	cross_dist[1] = cv::norm(crosses[1] - avg_point);
+	cross_dist[2] = cv::norm(crosses[2] - avg_point);
+
+	//argmin
+	size_t min;
+	if (cross_dist[0] > cross_dist[1])
+	{
+		if (cross_dist[1] > cross_dist[2]) min = 2;
+		else min = 1;
+	}
+	else
+	{
+		if (cross_dist[0] > cross_dist[2]) min = 2;
+		else min = 0;
+	}
+
+	std::pair<cv::Point2f, cv::Point2f> set1, set2;
+	cv::Point2f cross = crosses[min];
+	switch (min)
+	{
+	case 0:
+		set1 = std::make_pair<>(p0, p1);
+		set2 = std::make_pair<>(p2, p3);
+		break;
+	case 1:
+		set1 = std::make_pair<>(p0, p2);
+		set2 = std::make_pair<>(p1, p3);
+		break;
+	case 2:
+		set1 = std::make_pair<>(p0, p3);
+		set2 = std::make_pair<>(p1, p2);
+		break;
+	};
+
+	std::array<float, 4> dist_from_center;
+	dist_from_center[0] = cv::norm(set1.first - cross);
+	dist_from_center[1] = cv::norm(set1.second - cross);
+	dist_from_center[2] = cv::norm(set2.first - cross);
+	dist_from_center[3] = cv::norm(set2.second - cross);
+
+	cv::Point2f A, B, C, D;
+	if (abs(dist_from_center[0] - dist_from_center[1]) > abs(dist_from_center[2] - dist_from_center[3]))
+	{
+		if (dist_from_center[0] > dist_from_center[1])
+		{
+			B = set1.first;
+			A = set1.second;
+		}
+		else
+		{
+			B = set1.second;
+			A = set1.first;
+		}
+		cv::Point2f AB = B - A;
+		cv::Point2f tmp = set2.second - cross;
+		bool res;
+		if (!isright(tmp, AB, res)) return false;
+		if (res)
+		{
+			D = set2.second;
+			C = set2.first;
+		}
+		else
+		{
+			D = set2.first;
+			C = set2.second;
+		}
+	}
+	else
+	{
+		if (dist_from_center[2] > dist_from_center[3])
+		{
+			B = set2.first;
+			A = set2.second;
+		}
+		else
+		{
+			B = set2.second;
+			A = set2.first;
+		}
+		cv::Point2f AB = B - A;
+		cv::Point2f tmp = set1.second - cross;
+
+		bool res;
+		if (!isright(tmp, AB, res)) return false;
+		if (res)
+		{
+			D = set1.second;
+			C = set1.first;
+		}
+		else
+		{
+			D = set1.first;
+			C = set1.second;
+		}
+	}
+	if (abs(cv::norm(B - A) - cv::norm(C - D)) > 50) return false;
+
+	ans = std::make_tuple<>(A, B, C, D);
+	return true;
 }
 
 void huge::HugeTracker::producer()
@@ -178,7 +326,10 @@ void huge::HugeTracker::consumer()
 
 		cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
 		cv::GaussianBlur(gray, blured, img_option.blur_size, img_option.blur_sigma);
-		cv::threshold(blured, thresh, img_option.threshold, 255, cv::THRESH_BINARY);
+
+		cv::compare(thresh_mask, blured, thresh, cv::CMP_LT);
+
+		//cv::threshold(gray, thresh, img_option.threshold, 255, cv::THRESH_BINARY);
 
 		//Moments part
 		std::vector<std::vector<cv::Point>> contours;
@@ -190,143 +341,64 @@ void huge::HugeTracker::consumer()
 		for (auto c : contours)
 		{
 			auto m = cv::moments(c);
-			centers[i] = cv::Point2f(static_cast<float>(m.m10 / (m.m00 + 1e-5)),
-				static_cast<float>(m.m01 / (m.m00 + 1e-5)));
+			if (m.m00 < 1e-7) continue;
+			centers[i] = cv::Point2f(static_cast<float>(m.m10 / (m.m00)),
+				static_cast<float>(m.m01 / (m.m00)));
 			++i;
 		}
 
-		//make some clustering algorithm
-		if (contours.size() != 4) continue;
+		size_t num_centers = i;
+		if (num_centers < 4) continue;
 
-		//estimation
-		std::array<cv::Point2f, 3> crosses;
-		try//if determinent goes 0, std::error occur
+		cv::Mat Dist(num_centers, num_centers, CV_64F);
+		double* dist_data = (double*)Dist.data;
+		for (size_t i = 0; i < num_centers; i++)
 		{
-			crosses[0] = cross_point(centers[0], centers[1], centers[2], centers[3]);
-			crosses[1] = cross_point(centers[0], centers[2], centers[1], centers[3]);
-			crosses[2] = cross_point(centers[0], centers[3], centers[2], centers[3]);
-		}
-		catch (const std::exception&)
-		{
-			continue;
-		}
-
-		cv::Point2f avg_point(0, 0);
-		for (auto& p : centers)
-		{
-			avg_point += p;
-		}
-		avg_point /= 4.0f;
-
-		std::array<float, 3> cross_dist;
-		cross_dist[0] = cv::norm(crosses[0] - avg_point);
-		cross_dist[1] = cv::norm(crosses[1] - avg_point);
-		cross_dist[2] = cv::norm(crosses[2] - avg_point);
-
-		//argmin
-		size_t min;
-		if (cross_dist[0] > cross_dist[1])
-		{
-			if (cross_dist[1] > cross_dist[2]) min = 2;
-			else min = 1;
-		}
-		else
-		{
-			if (cross_dist[0] > cross_dist[2]) min = 2;
-			else min = 0;
-		}
-
-		std::pair<cv::Point2f, cv::Point2f> set1, set2;
-		cv::Point2f cross = crosses[min];
-		switch (min)
-		{
-		case 0:
-			set1 = std::make_pair<>(centers[0], centers[1]);
-			set2 = std::make_pair<>(centers[2], centers[3]);
-			break;
-		case 1:
-			set1 = std::make_pair<>(centers[0], centers[2]);
-			set2 = std::make_pair<>(centers[1], centers[3]);
-			break;
-		case 2:
-			set1 = std::make_pair<>(centers[0], centers[3]);
-			set2 = std::make_pair<>(centers[1], centers[2]);
-			break;
-		};
-
-		std::array<float, 4> dist_from_center;
-		dist_from_center[0] = cv::norm(set1.first - cross);
-		dist_from_center[1] = cv::norm(set1.second - cross);
-		dist_from_center[2] = cv::norm(set2.first - cross);
-		dist_from_center[3] = cv::norm(set2.second - cross);
-
-		cv::Point2f A, B, C, D;
-		if (abs(dist_from_center[0] - dist_from_center[1]) > abs(dist_from_center[2] - dist_from_center[3]))
-		{
-			if (dist_from_center[0] > dist_from_center[1])
+			for (size_t j = i; j < num_centers; j++)
 			{
-				B = set1.first;
-				A = set1.second;
+				if (i == j) dist_data[i*Dist.cols + j] = 0;
+				auto tmp = cv::norm(centers[i] - centers[j]);
+				dist_data[i*Dist.cols + j] = tmp;
+				dist_data[j*Dist.cols + i] = tmp;
 			}
-			else
+		}
+
+		std::vector<std::tuple<int, int, int, int>> sig;
+		std::vector<int> counts;
+		for (size_t i = 0; i < num_centers; i++)
+		{
+			auto s = Dist.col(i);
+			cv::Mat sorted;
+			cv::sortIdx(s, sorted, cv::SORT_EVERY_COLUMN+cv::SORT_ASCENDING);
+			int* sorted_data = (int*)sorted.data;
+			std::sort(sorted_data, sorted_data + 4);
+			auto comb_tuple = std::make_tuple<>(sorted_data[0], sorted_data[1], sorted_data[2], sorted_data[3]);
+			bool flag = true;
+			for (size_t i = 0; i< sig.size(); i++)
 			{
-				B = set1.second;
-				A = set1.first;
-			}
-			cv::Point2f AB = B - A;
-			cv::Point2f tmp = set2.second - cross;
-			try//if determinent goes 0, std::error occur
-			{
-				if (isright(tmp, AB))
+				if (comb_tuple == sig[i])
 				{
-					D = set2.second;
-					C = set2.first;
-				}
-				else
-				{
-					D = set2.first;
-					C = set2.second;
+					counts[i] += 1;
+					flag = false;
+					break;
 				}
 			}
-			catch (const std::exception&)
+			if (flag)
 			{
-				continue;
+				sig.push_back(comb_tuple);
+				counts.push_back(1);
 			}
 		}
-		else
-		{
-			if (dist_from_center[2] > dist_from_center[3])
-			{
-				B = set2.first;
-				A = set2.second;
-			}
-			else
-			{
-				B = set2.second;
-				A = set2.first;
-			}
-			cv::Point2f AB = B - A;
-			cv::Point2f tmp = set1.second - cross;
-			try//if determinent goes 0, std::error occur
-			{
-				if (isright(tmp, AB))
-				{
-					D = set1.second;
-					C = set1.first;
-				}
-				else
-				{
-					D = set1.first;
-					C = set1.second;
-				}
-			}
-			catch (const std::exception&)
-			{
-				continue;
-			}
-		}
+		int max_idx = std::max_element(counts.begin(), counts.end()) - counts.begin();
+
+		auto[i1, i2, i3, i4] = sig[max_idx];
+
+		std::tuple<cv::Point2f, cv::Point2f, cv::Point2f, cv::Point2f> input_points, labeled_points;
+		input_points = std::make_tuple<>(centers[i1], centers[i2], centers[i3], centers[i4]);
+		if(!LabelingPoint(input_points, labeled_points)) continue;
 
 		cv::Mat rvec, tvec, rod;	// rotation & translation vectors
+		auto&[A, B, C, D] = labeled_points;
 		std::vector<cv::Point2f> img_p = { A, B, C, D };
 		cv::solvePnP(object.points, img_p, intr.get_intr_mat(), intr.get_dist_mat(), rvec, tvec);
 
