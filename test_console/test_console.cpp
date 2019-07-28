@@ -11,9 +11,9 @@ int main()
 
 	while (true)
 	{
-		//cpp17 standard: structural binding
-		auto[a, b] = t->get_transform(0);
-		std::cout << "x: " << b[0] << " y: " << b[1] << " z: " << b[2] << std::endl;
+		std::array<float, 3> l, f, u;
+		t->get_transform(0, l, f, u);
+		std::cout << "x: " << u[0] << " y: " << u[1] << " z: " << u[2] << std::endl;
 		Sleep(100);
 	}
 }

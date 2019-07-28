@@ -72,13 +72,13 @@ namespace huge
 			}
 		};
 
-		std::tuple<std::array<float, 3>, std::array<float, 3>> get_transform(size_t id)
+		void get_transform(size_t id, std::array<float, 3>& location, std::array<float, 3>& foward_vector, std::array<float, 3>& upward_vector)
 		{
 			result_lock.lock();
-			auto tmp1 = trans;
-			auto tmp2 = forward;
+			location = trans;
+			foward_vector = forward;
+			upward_vector = upward;
 			result_lock.unlock();
-			return std::make_tuple(tmp1, tmp2);
 		};
 
 	private:
@@ -129,6 +129,7 @@ namespace huge
 		std::mutex result_lock;
 		std::array<float, 3> trans;
 		std::array<float, 3> forward;
+		std::array<float, 3> upward;
 		//std::array<float, 9> rots;
 
 		std::thread producer_thread;
@@ -413,15 +414,21 @@ void huge::HugeTracker::consumer()
 
 		cv::Rodrigues(rvec, rod);
 		rod.convertTo(rod, CV_32F);
-		cv::Mat Bp = cv::Mat(object.p1);
 		cv::Mat Ap = cv::Mat(object.p0);
+		cv::Mat Bp = cv::Mat(object.p1);
+		cv::Mat Cp = cv::Mat(object.p2);
+		cv::Mat Dp = cv::Mat(object.p3);
 		cv::Mat forw = rod * Bp - rod * Ap;
+		cv::Mat up = forw.cross(rod * Cp - rod * Dp);
 		cv::Point3f forvec = cv::Point3f(forw.at<float>(0, 0), forw.at<float>(1, 0), forw.at<float>(2, 0));
 		forvec = forvec / cv::norm(forvec);
+		cv::Point3f upvec = cv::Point3f(up.at<float>(0, 0), up.at<float>(1, 0), up.at<float>(2, 0));
+		upvec = upvec / cv::norm(upvec);
+		if (upvec.z < 0) upvec = -upvec;
 		
-
 		std::array<float, 3> trans_arr = { (float)tvec.at<double>(0), (float)tvec.at<double>(1), (float)tvec.at<double>(2) };
 		std::array<float, 3> for_arr = { forvec.x, forvec.y, forvec.z };
+		std::array<float, 3> up_arr = { upvec.x, upvec.y, upvec.z };
 
 		/// Font Face
 		int myFontFace = 2;
@@ -446,6 +453,7 @@ void huge::HugeTracker::consumer()
 		result_lock.lock();
 		trans = trans_arr;
 		forward = for_arr;
+		upward = up_arr;
 		result_lock.unlock();
 	}
 }
