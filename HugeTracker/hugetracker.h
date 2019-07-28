@@ -72,11 +72,11 @@ namespace huge
 			}
 		};
 
-		std::tuple<std::array<double, 3>, std::array<double, 9>> get_transform(size_t id)
+		std::tuple<std::array<float, 3>, std::array<float, 3>> get_transform(size_t id)
 		{
 			result_lock.lock();
 			auto tmp1 = trans;
-			auto tmp2 = rots;
+			auto tmp2 = forward;
 			result_lock.unlock();
 			return std::make_tuple(tmp1, tmp2);
 		};
@@ -95,7 +95,7 @@ namespace huge
 			cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
 			thresh_mask = cv::Mat::ones(frame.size(), CV_8U)*255;
 			uchar* data = thresh_mask.data;
-			for (int i = 0; i < 300; i++)
+			for (int i = 0; i < 650; i++)
 			{
 				for (int j = 0; j < frame.size().height; j++)
 				{
@@ -127,8 +127,9 @@ namespace huge
 		concurrency::concurrent_queue<cv::Mat> image_queue;
 
 		std::mutex result_lock;
-		std::array<double, 3> trans;
-		std::array<double, 9> rots;
+		std::array<float, 3> trans;
+		std::array<float, 3> forward;
+		//std::array<float, 9> rots;
 
 		std::thread producer_thread;
 		std::thread consumer_thread;
@@ -354,11 +355,6 @@ void huge::HugeTracker::consumer()
 			
 		}
 
-		cv::Mat resized;
-		cv::resize(cutted, resized, cv::Size(0, 0), 0.25, 0.25);
-		cv::imshow("asdf", resized);
-		cv::waitKey(1);
-
 
 		size_t num_centers = i;
 		if (num_centers < 4) continue;
@@ -416,15 +412,32 @@ void huge::HugeTracker::consumer()
 		cv::solvePnP(object.points, img_p, intr.get_intr_mat(), intr.get_dist_mat(), rvec, tvec);
 
 		cv::Rodrigues(rvec, rod);
-		std::array<double, 3> trans_arr = { tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2) };
-		std::array<double, 9>   rot_arr = { rod.at<double>(0,0), rod.at<double>(0,1), rod.at<double>(0,2),
-										    rod.at<double>(1,0), rod.at<double>(1,1), rod.at<double>(1,2),
-										    rod.at<double>(2,0), rod.at<double>(2,1), rod.at<double>(2,2) };
+		rod.convertTo(rod, CV_32F);
+		cv::Mat Bp = cv::Mat(object.p1);
+		cv::Mat Ap = cv::Mat(object.p0);
+		cv::Mat forw = rod * Bp - rod * Ap;
+		cv::Point3f forvec = cv::Point3f(forw.at<float>(0, 0), forw.at<float>(1, 0), forw.at<float>(2, 0));
+		forvec = forvec / cv::norm(forvec);
+		
 
-		cv::circle(frame, A, 10, cv::Scalar(0, 0, 255));
-		cv::circle(frame, B, 10, cv::Scalar(0, 0, 255));
-		cv::circle(frame, C, 10, cv::Scalar(0, 0, 255));
-		cv::circle(frame, D, 10, cv::Scalar(0, 0, 255));
+		std::array<float, 3> trans_arr = { (float)tvec.at<double>(0), (float)tvec.at<double>(1), (float)tvec.at<double>(2) };
+		std::array<float, 3> for_arr = { forvec.x, forvec.y, forvec.z };
+
+		/// Font Face
+		int myFontFace = 2;
+
+		/// Font Scale
+		double myFontScale = 2;
+
+		cv::putText(frame, "A", A, myFontFace, myFontScale, cv::Scalar::all(255));
+		cv::putText(frame, "B", B, myFontFace, myFontScale, cv::Scalar::all(255));
+		cv::putText(frame, "C", C, myFontFace, myFontScale, cv::Scalar::all(255));
+		cv::putText(frame, "D", D, myFontFace, myFontScale, cv::Scalar::all(255));
+
+		cv::Mat resized;
+		cv::resize(frame, resized, cv::Size(0, 0), 0.25, 0.25);
+		cv::imshow("asdf", resized);
+		cv::waitKey(1);
 
 		//cv::Mat resized;
 		//cv::resize(frame, resized, cv::Size(0,0), 0.25, 0.25);
@@ -432,7 +445,7 @@ void huge::HugeTracker::consumer()
 		//cv::waitKey(1);
 		result_lock.lock();
 		trans = trans_arr;
-		rots = rot_arr;
+		forward = for_arr;
 		result_lock.unlock();
 	}
 }
