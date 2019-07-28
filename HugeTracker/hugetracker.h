@@ -93,15 +93,16 @@ namespace huge
 			cv::Mat frame, gray;
 			capture.read(frame);
 			cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
-			cv::Mat kernel = cv::Mat::ones(cv::Size(51, 51), CV_32F) / 51 / 51;
-			gray.convertTo(gray, CV_32F);
-			cv::filter2D(gray, thresh_mask, -1, kernel);
+			thresh_mask = cv::Mat::ones(frame.size(), CV_8U)*255;
+			uchar* data = thresh_mask.data;
+			for (int i = 0; i < 300; i++)
+			{
+				for (int j = 0; j < frame.size().height; j++)
+				{
+					data[j*frame.size().width + i] = 0;
+				}
+			}
 
-			thresh_mask.convertTo(thresh_mask, CV_8UC1);
-			thresh_mask += img_option.offset;
-
-			cv::Mat resized;
-			cv::resize(thresh_mask, resized, cv::Size(0, 0), 0.25, 0.25);
 
 			producer_thread = std::thread([=] { producer(); });
 			consumer_thread = std::thread([=] { consumer(); });
@@ -317,7 +318,7 @@ void huge::HugeTracker::producer()
 void huge::HugeTracker::consumer()
 {
 	while (!kill_sig) {
-		cv::Mat frame, gray, thresh, blured;
+		cv::Mat frame, gray, cutted, thresh, blured;
 		if (!image_queue.try_pop(frame)) continue;
 
 		// If the frame is empty, break immediately
@@ -325,11 +326,15 @@ void huge::HugeTracker::consumer()
 			break;
 
 		cv::cvtColor(frame, gray, cv::COLOR_RGB2GRAY);
+
+
 		cv::GaussianBlur(gray, blured, img_option.blur_size, img_option.blur_sigma);
 
-		cv::compare(thresh_mask, blured, thresh, cv::CMP_LT);
+		cv::bitwise_and(blured, thresh_mask, cutted);
 
-		//cv::threshold(gray, thresh, img_option.threshold, 255, cv::THRESH_BINARY);
+		//cv::compare(thresh_mask, blured, thresh, cv::CMP_LT);
+
+		cv::threshold(cutted, thresh, 180, 255, cv::THRESH_BINARY);
 
 		//Moments part
 		std::vector<std::vector<cv::Point>> contours;
@@ -344,8 +349,16 @@ void huge::HugeTracker::consumer()
 			if (m.m00 < 1e-7) continue;
 			centers[i] = cv::Point2f(static_cast<float>(m.m10 / (m.m00)),
 				static_cast<float>(m.m01 / (m.m00)));
+			cv::circle(frame, centers[i], 10, cv::Scalar(0, 0, 255), 10);
 			++i;
+			
 		}
+
+		cv::Mat resized;
+		cv::resize(cutted, resized, cv::Size(0, 0), 0.25, 0.25);
+		cv::imshow("asdf", resized);
+		cv::waitKey(1);
+
 
 		size_t num_centers = i;
 		if (num_centers < 4) continue;
@@ -404,9 +417,19 @@ void huge::HugeTracker::consumer()
 
 		cv::Rodrigues(rvec, rod);
 		std::array<double, 3> trans_arr = { tvec.at<double>(0), tvec.at<double>(1), tvec.at<double>(2) };
-		std::array<double, 9>   rot_arr = { rod.at<double>(0,0), tvec.at<double>(0,1), tvec.at<double>(0,2),
-										   rod.at<double>(1,0), tvec.at<double>(1,1), tvec.at<double>(1,2),
-										   rod.at<double>(2,0), tvec.at<double>(2,1), tvec.at<double>(2,2) };
+		std::array<double, 9>   rot_arr = { rod.at<double>(0,0), rod.at<double>(0,1), rod.at<double>(0,2),
+										    rod.at<double>(1,0), rod.at<double>(1,1), rod.at<double>(1,2),
+										    rod.at<double>(2,0), rod.at<double>(2,1), rod.at<double>(2,2) };
+
+		cv::circle(frame, A, 10, cv::Scalar(0, 0, 255));
+		cv::circle(frame, B, 10, cv::Scalar(0, 0, 255));
+		cv::circle(frame, C, 10, cv::Scalar(0, 0, 255));
+		cv::circle(frame, D, 10, cv::Scalar(0, 0, 255));
+
+		//cv::Mat resized;
+		//cv::resize(frame, resized, cv::Size(0,0), 0.25, 0.25);
+		//cv::imshow("asdf", resized);
+		//cv::waitKey(1);
 		result_lock.lock();
 		trans = trans_arr;
 		rots = rot_arr;
